@@ -1,62 +1,58 @@
 import streamlit as st
-import requests
+import feedparser
 import pandas as pd
-from datetime import datetime, timedelta
+from datetime import datetime
+import urllib.parse
 
 # 頁面設定
-st.set_page_config(page_title="24H 全球財經新聞儀表板", layout="wide")
+st.set_page_config(page_title="24H 全球財經免API監控", layout="wide")
 
-# 從 Streamlit Secrets 讀取 API Key (部署後在 Streamlit Cloud 設定)
-API_KEY = st.secrets["NEWS_API_KEY"]
-
-def fetch_news(query):
-    # 設定搜尋 24 小時內的新聞
-    from_date = (datetime.now() - timedelta(hours=24)).strftime('%Y-%m-%dT%H:%M:%S')
-    url = f"https://newsapi.org/v2/everything?q={query}&from={from_date}&sortBy=publishedAt&language=zh&apiKey={API_KEY}"
+def get_google_news(search_query):
+    # 將關鍵字進行 URL 編碼
+    encoded_query = urllib.parse.quote(search_query)
+    # 使用 Google News RSS 連結 (hl=zh-TW 為繁體中文, gl=TW 為台灣區域)
+    # when:1d 代表過去 24 小時
+    rss_url = f"https://news.google.com/rss/search?q={encoded_query}+when:1d&hl=zh-TW&gl=TW&ceid=TW:zh-Hant"
     
-    # NewsAPI 的中文支援有時有限，若無結果則嘗試英文搜尋
-    response = requests.get(url)
-    data = response.json()
+    feed = feedparser.parse(rss_url)
+    articles = []
     
-    if data.get("status") == "ok":
-        return data.get("articles", [])
-    return []
+    for entry in feed.entries[:10]: # 每個分類取前 10 則
+        articles.append({
+            "title": entry.title,
+            "link": entry.link,
+            "published": entry.published,
+            "source": entry.source.title if hasattr(entry, 'source') else "Google News"
+        })
+    return articles
 
-# --- 側邊欄設定 ---
-st.sidebar.title("🔍 新聞追蹤設定")
-update_interval = st.sidebar.selectbox("自動重新整理頻率", ["手動", "15分鐘", "1小時"])
-if st.sidebar.button("立即更新數據"):
-    st.rerun()
+st.title("📊 24H 財經新聞即時監控 (RSS 版)")
+st.caption("使用 Google News 資源，無需 API Key，自動抓取過去 24 小時新聞。")
 
-st.title("📊 24H 財經新聞即時監控")
-st.write(f"最後更新時間：{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
-
-# --- 分類邏輯 ---
+# 定義分類與搜尋關鍵字
 categories = {
-    "🌍 總體經濟": "Macroeconomics OR Inflation OR Fed OR Central Bank",
-    "🇺🇸 美股重大新聞": "US Stock Market OR S&P500 OR Nasdaq OR Nvidia OR Apple",
-    "🇹🇼 台股重大新聞": "Taiwan Stock OR TSMC OR 台股 OR 半導體",
-    "🇯🇵 日股重大新聞": "Japan Stock OR Nikkei 225 OR Yen OR Tokyo Stock Exchange"
+    "🌍 總體經濟": "總體經濟 OR 通膨 OR 聯準會 OR 降息",
+    "🇺🇸 美股重大新聞": "美股 OR 標普500 OR 納斯達克 OR NVIDIA OR 蘋果股價",
+    "🇹🇼 台股重大新聞": "台股 OR 積體電路 OR 台積電 OR 鴻海 OR 加權指數",
+    "🇯🇵 日股重大新聞": "日股 OR 日經225 OR 日本銀行 OR 日圓匯率"
 }
 
-# 建立分頁
 tabs = st.tabs(list(categories.keys()))
 
 for i, (name, query) in enumerate(categories.items()):
     with tabs[i]:
-        articles = fetch_news(query)
-        if not articles:
-            st.info(f"目前暫無 {name} 的相關新聞。")
-        else:
-            for art in articles[:10]:  # 顯示前10則
-                with st.container():
-                    col1, col2 = st.columns([1, 4])
-                    with col1:
-                        if art.get("urlToImage"):
-                            st.image(art["urlToImage"])
-                    with col2:
-                        st.subheader(art["title"])
-                        st.caption(f"來源: {art['source']['name']} | 發布時間: {art['publishedAt']}")
-                        st.write(art["description"])
-                        st.markdown(f"[閱讀全文]({art['url']})")
-                    st.divider()
+        with st.spinner(f'正在讀取 {name}...'):
+            news_items = get_google_news(query)
+            
+            if not news_items:
+                st.warning(f"⚠️ 過去 24 小時內暫無 {name} 相關新聞，請嘗試點選側邊欄更新。")
+            else:
+                for item in news_items:
+                    with st.expander(f"📌 {item['title']}"):
+                        st.write(f"**來源：** {item['source']}")
+                        st.write(f"**發布時間：** {item['published']}")
+                        st.markdown(f"[🔗 點擊閱讀新聞全文]({item['link']})")
+
+# 側邊欄重新整理按鈕
+if st.sidebar.button("🔄 立即重新整理"):
+    st.rerun()
